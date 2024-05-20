@@ -1,4 +1,4 @@
-# Streamlit based Automatic Number Plate Recognition
+# Automatic Number Plate Recognition
 
 Navigate to the root directory of this repository and simply run the command: 
 ```
