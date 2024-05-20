@@ -1,14 +1,36 @@
 import streamlit as st
-import argparse
 import io
 import os
 from PIL import Image
 import cv2
 import numpy as np
-from torchvision.models import detection
 import torch
-from torchvision import models
-from io import BytesIO
+
+import pytesseract
+
+text=None
+
+import mysql.connector
+from mysql.connector import Error
+
+try:
+    connection = mysql.connector.connect(host='localhost',
+                                         database='vehicle',
+                                         user='root',
+                                         password='')
+    sql_select_Query = "select np from final"
+    # MySQLCursorDict creates a cursor that returns rows as dictionaries
+    cursor = connection.cursor(dictionary=True)
+    cursor.execute(sql_select_Query)
+    records = cursor.fetchall()
+    print(type(records))
+except Error as e:
+    print("Error reading data from MySQL table", e)   
+    
+
+extracted_text=None
+# Set path to Tesseract executable
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 st.set_page_config(
     page_title="Auto NPR",
@@ -17,19 +39,22 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-@st.cache(persist=True,allow_output_mutation=True,show_spinner=False,suppress_st_warning=True)
+@st.cache_resource
 def instantiate_model():
     model = torch.hub.load("ultralytics/yolov5", "custom", path = "model/best (4).pt", force_reload=True)
-    #model =  torch.hub.load('./yolov5-master', 'custom', source ='local', path='model/best (2).pt',force_reload=True)
     model.eval()
     model.conf = 0.5
     model.iou = 0.45
     return model
 
-@st.cache(persist=True,allow_output_mutation=True,show_spinner=False,suppress_st_warning=True)
+@st.cache_data(persist=True)
+def get_success_message():
+    return '✅ Download Successful !!'
+
 def download_success():
     st.balloons()
-    st.success('✅ Download Successful !!')
+    st.success(get_success_message())
+
 
 top_image = Image.open('static/banner_top.png')
 bottom_image = Image.open('static/banner_bottom.png')
@@ -63,7 +88,7 @@ if selected_type == "Upload Image":
             img = Image.open(io.BytesIO(img_bytes))
             results = model(img, size=640)
             results.render()
-            for img in results.imgs:
+            for img in results.ims:
                 img_base64 = Image.fromarray(img)
                 img_base64.save(downloaded_image, format="JPEG")
 
@@ -71,6 +96,42 @@ if selected_type == "Upload Image":
             print("Opening ",final_image)
             st.markdown("---")
             st.image(final_image, caption='This is how your final image looks like 😉')
+            
+            count = 0
+            CONFIDENCE_THRESHOLD = 0.5
+            for result in results.xyxy[0]:
+             if result[4] > CONFIDENCE_THRESHOLD and result[5] == 1.0:
+              count += 1
+              x1, y1, x2, y2 = int(result[0]), int(result[1]), int(result[2]), int(result[3])
+              p = img[y1:y2, x1:x2]
+              st.image(p, caption=f'Number Plate {count}')
+              cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+              cv2.putText(img, f'Number plate {count}', (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+              text = pytesseract.image_to_string(p)
+              st.text(f"Number {count}:")
+              st.write(text)
+              
+            
+            
+            print(type(text),text)
+            
+            for column in records:
+                    num = str(column['np'])
+                    print(type(num),num)
+                    if num == text:
+                        st.write("Not matches")
+                    else:
+                        st.write("Number plate matches expected value!")
+                        
+            # Using PyTesseract to extract the characters from the number plate
+            with st.spinner("Extracting characters from number plate..."):
+                extracted_text = pytesseract.image_to_string(final_image)
+                st.success(f"Extracted characters: {extracted_text}")
+              
+                
+                
+                
             with open(downloaded_image, "rb") as file:
                 if uploaded_file.name.endswith('.jpg') or uploaded_file.name.endswith('.JPG'):
                     if st.download_button(
@@ -128,13 +189,42 @@ else:
                 results.print()
                 img = np.squeeze(results.render())
                 img_BGR = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                count = 0
+                CONFIDENCE_THRESHOLD = 0.5
+                for result in results.xyxy[0]:
+                  if result[4] > CONFIDENCE_THRESHOLD and result[5] == 1.0:
+                    count += 1
+                    x1, y1, x2, y2 = int(result[0]), int(result[1]), int(result[2]), int(result[3])
+                    p = img[y1:y2, x1:x2]
+                    st.image(p, caption=f'Number Plate {count}')
+                    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                    cv2.putText(img, f'Number plate {count}', (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+                    text = pytesseract.image_to_string(p)
+                    st.text(f"Number {count}:")
+                    st.write(text)
+
+            
+            
+            # Using PyTesseract to extract the characters from the number plate
+                
+                    with st.spinner("Extracting characters from number plate..."):
+                        extracted_text = pytesseract.image_to_string(img)
+                        
+                        st.success(f"Extracted characters: {extracted_text}")
+                
             else:
                 break
             frame = cv2.imencode('.jpg', img_BGR)[1].tobytes()
             FRAME_WINDOW.image(frame)
+        
     else:
         cap.release()
         cv2.destroyAllWindows()
         st.warning('⚠ The Web-Camera is currently disabled. 😯')
 
-st.markdown("<br><hr><center>Made with ❤️ by <a href='rajgokul.it21@bitsathy.ac.in?subject=Automatic Number Plate Recognition WebApp!&body=Please specify the issue you are facing with the app.'><strong>RAJGOKUL</strong></a></center><hr>", unsafe_allow_html=True)
+st.markdown("<br><hr><center>Made with ❤️ by <strong>RAJGOKUL</strong></a></center><hr>")
+if connection.is_connected():
+        connection.close()
+        cursor.close()
+        print("MySQL connection is closed")
